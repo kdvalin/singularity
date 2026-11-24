@@ -122,6 +122,57 @@ async def space_list_cmd(args: types.SimpleNamespace) -> int:
     await client.close()
     return 0
 
+async def room_create_cmd(args: types.SimpleNamespace) -> int:
+    client = login()
+    if client is None:
+        return 1
+
+    resp: nio.RoomCreateResponse = await client.room_create(
+        nio.RoomVisibility.public,
+        name=args.name
+    )
+
+    if isinstance(resp, nio.RoomCreateError):
+        print(f'Could not create room "{args.name}"', file=sys.stderr)
+        print(f'{resp}')
+        await client.close()
+        return 1
+    print("Room created!")
+
+    if args.space is None:
+        return 0
+    
+    space_id = None
+    spaces = await get_spaces(client)
+    for i in spaces:
+        if i['name'] == args.space:
+            space_id = i['id']
+            break
+    
+    if space_id is None:
+        print(f'Could not associate room "{args.name}" with space "{args.space}', file=sys.stder)
+        print(f'Could not find space "{args.space}"')
+        await client.close()
+        return 1
+
+    put_resp = await client.room_put_state(
+        room_id=space_id,
+        event_type="m.space.child",
+        state_key=resp.room_id,
+        content={
+            "via": [client.homeserver],
+            "suggested": True
+        }
+    )
+
+    if isinstance(put_resp, nio.RoomPutStateError):
+        print(f'Could not associate room "{args.name}" with space "{args.space}', file=sys.stder)
+        print(f'{put_resp}')
+        await client.close()
+        return 1
+    
+    await client.close()
+    return 0
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
@@ -145,6 +196,14 @@ async def main() -> None:
 
     space_list_parser = space_subparsers.add_parser("list", help="Lists the spaces within the matrix server")
     space_list_parser.set_defaults(func=space_list_cmd)
+
+    room_parser = subparsers.add_parser("room", help="Manage spaces within the matrix server")
+    room_subparsers = room_parser.add_subparsers(dest="room_cmd", required=True)
+    
+    room_create_parser = room_subparsers.add_parser("create", help="Creates a room on the matrix server")
+    room_create_parser.add_argument("name", help="Name of the room", type=str)
+    room_create_parser.add_argument("-s", "--space", help="The space to place the room under", type=str, dest="space", default=None)
+    room_create_parser.set_defaults(func=room_create_cmd)
 
     args = parser.parse_args()
     await args.func(args)
