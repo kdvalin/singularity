@@ -73,6 +73,29 @@ async def logout_cmd(_: types.SimpleNamespace) -> int:
     os.remove(CONFIG_FILE)
     print("Logged out!")
     return retval
+
+
+async def space_create_cmd(args: types.SimpleNamespace) -> int:
+    retval = 0
+    client = login()
+    if client is None:
+        return 1
+    
+    resp = await client.room_create(
+        nio.RoomVisibility.public,
+        name=args.name,
+        space=True
+    )
+
+    if isinstance(resp, nio.RoomCreateError):
+        retval = 1
+        print(f"Could not create space \"{args.name}\"", file=sys.stderr)
+        print(resp)
+    else:
+        print("Space created successfully!")
+
+    await client.close()
+    return retval
     
 
 async def main() -> None:
@@ -87,6 +110,13 @@ async def main() -> None:
 
     logout_parser = subparsers.add_parser("logout", help="Login to the matrix server")
     logout_parser.set_defaults(func=logout_cmd)
+
+    space_parser = subparsers.add_parser("space", help="Manage spaces within the matrix server")
+    space_subparsers = space_parser.add_subparsers(dest="spaces_cmd", required=True)
+    
+    space_create_parser = space_subparsers.add_parser("create", help="Creates a space on the matrix server")
+    space_create_parser.add_argument("name", help="Name of the space", type=str)
+    space_create_parser.set_defaults(func=space_create_cmd)
 
     args = parser.parse_args()
     await args.func(args)
