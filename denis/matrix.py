@@ -24,6 +24,25 @@ async def get_spaces(client: AsyncClient) -> list[dict[str, str]]:
 
     return output
 
+async def get_rooms(client: AsyncClient) -> list[dict[str, str]]:
+    output = []
+    await client.sync()
+    for i in client.rooms.values():
+        if i.room_type != "m.space":
+            output.append({
+                "name": i.name,
+                "id": i.room_id
+            })
+
+    return output
+
+async def get_room_by_name(client: AsyncClient, name: str) -> dict[str, str] | None:
+    rooms = await get_rooms(client)
+    for i in rooms:
+        if i['name'] == name:
+            return i
+    return None
+
 def login() -> AsyncClient | None:
     if not os.path.exists(CONFIG_FILE):
         print(f"Credential file {CONFIG_FILE} does not exist", file=sys.stderr)
@@ -174,6 +193,43 @@ async def room_create_cmd(args: types.SimpleNamespace) -> int:
     await client.close()
     return 0
 
+async def room_list_cmd(args: types.SimpleNamespace) -> int:
+    client = login()
+    if client is None:
+        return 1
+    print("Name\tID")
+    for i in await get_rooms(client):
+        print(f"{i['name']}\t{i['id']}")
+    await client.close()
+    return 0
+
+async def room_invite_cmd(args: types.SimpleNamespace) -> int:
+    client = login()
+    if client is None:
+        return 1
+    
+    room = await get_room_by_name(client, args.name)
+    if room is None:
+        print(f'Could not find room named "{args.name}"')
+        await client.close()
+        return 1
+    
+    resp = await client.room_invite(
+        room['id'],
+        args.user
+    )
+
+    if isinstance(resp, nio.RoomInviteError):
+        print(f'Could not invite "{args.user}" to "{args.name}"')
+        print(f'{resp}')
+        await client.close()
+        return 1
+    
+    print('User invited!')
+    await client.close()
+    return 0
+    
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
@@ -204,6 +260,14 @@ async def main() -> None:
     room_create_parser.add_argument("name", help="Name of the room", type=str)
     room_create_parser.add_argument("-s", "--space", help="The space to place the room under", type=str, dest="space", default=None)
     room_create_parser.set_defaults(func=room_create_cmd)
+
+    room_list_parser = room_subparsers.add_parser("list", help="Invites a user to a room")
+    room_list_parser.set_defaults(func=room_list_cmd)
+
+    room_invite_parser = room_subparsers.add_parser("invite", help="Invites a user to a room")
+    room_invite_parser.add_argument("name", help="Name of the room", type=str)
+    room_invite_parser.add_argument("user", help="User ID to be added to the room", type=str)
+    room_invite_parser.set_defaults(func=room_invite_cmd)
 
     args = parser.parse_args()
     await args.func(args)
