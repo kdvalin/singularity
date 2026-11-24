@@ -12,6 +12,18 @@ from nio import AsyncClient
 CONFIG_FILE = "/tmp/matrix_creds"
 
 
+async def get_spaces(client: AsyncClient) -> list[dict[str, str]]:
+    output = []
+    await client.sync()
+    for i in client.rooms.values():
+        if i.room_type == "m.space":
+            output.append({
+                "name": i.name,
+                "id": i.room_id
+            })
+
+    return output
+
 def login() -> AsyncClient | None:
     if not os.path.exists(CONFIG_FILE):
         print(f"Credential file {CONFIG_FILE} does not exist", file=sys.stderr)
@@ -90,13 +102,26 @@ async def space_create_cmd(args: types.SimpleNamespace) -> int:
     if isinstance(resp, nio.RoomCreateError):
         retval = 1
         print(f"Could not create space \"{args.name}\"", file=sys.stderr)
-        print(resp)
+        print(resp, file=sys.stderr)
     else:
         print("Space created successfully!")
 
     await client.close()
     return retval
-    
+
+async def space_list_cmd(args: types.SimpleNamespace) -> int:
+    client = login()
+    if client is None:
+        return 1
+
+    spaces = await get_spaces(client)
+
+    print("Name\tID")
+    for space in spaces:    
+        print(f"{space['name']}\t{space['id']}")
+    await client.close()
+    return 0
+
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
@@ -117,6 +142,9 @@ async def main() -> None:
     space_create_parser = space_subparsers.add_parser("create", help="Creates a space on the matrix server")
     space_create_parser.add_argument("name", help="Name of the space", type=str)
     space_create_parser.set_defaults(func=space_create_cmd)
+
+    space_list_parser = space_subparsers.add_parser("list", help="Lists the spaces within the matrix server")
+    space_list_parser.set_defaults(func=space_list_cmd)
 
     args = parser.parse_args()
     await args.func(args)
