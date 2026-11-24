@@ -6,7 +6,8 @@ import os
 import argparse
 import types
 
-from nio import AsyncClient, LoginResponse
+import nio
+from nio import AsyncClient
 
 CONFIG_FILE = "/tmp/matrix_creds"
 
@@ -38,7 +39,7 @@ async def login_cmd(args: types.SimpleNamespace) -> int:
     client = AsyncClient(args.homeserver, args.uname, ssl=False)
     resp = await client.login(args.password, device_name)
 
-    if not isinstance(resp, LoginResponse):
+    if isinstance(resp, nio.LoginError):
         print(f"Could not login to {args.homeserver} as {args.uname}", file=sys.stderr)
         print(f"{resp}", file=sys.stderr)
         await client.close()
@@ -56,6 +57,24 @@ async def login_cmd(args: types.SimpleNamespace) -> int:
 
     return 0
 
+async def logout_cmd(_: types.SimpleNamespace) -> int:
+    retval = 0
+    client = login()
+    if client is None:
+        print("Nothing to log out!", file=sys.stderr)
+        return 0
+    
+    resp = await client.logout()
+    if isinstance(resp, nio.LogoutError):
+        print("Could not logout!", file=sys.stderr)
+        print(f"{resp}", file=sys.stderr)
+        retval = 1
+    await client.close()
+    os.remove(CONFIG_FILE)
+    print("Logged out!")
+    return retval
+    
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
@@ -65,6 +84,9 @@ async def main() -> None:
     login_parser.add_argument("uname", type=str, help="The user to login as")
     login_parser.add_argument("password", type=str, help="Password for the user")
     login_parser.set_defaults(func=login_cmd)
+
+    logout_parser = subparsers.add_parser("logout", help="Login to the matrix server")
+    logout_parser.set_defaults(func=logout_cmd)
 
     args = parser.parse_args()
     await args.func(args)
