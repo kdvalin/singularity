@@ -23,6 +23,7 @@ FROM alpine:3.24 AS denis
 RUN apk add \
 	py3-peewee \
 	py3-gitpython \
+	py3-matrxi-nio \
 	tzdata \
 	;
 
