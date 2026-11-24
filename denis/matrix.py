@@ -12,6 +12,17 @@ from nio import AsyncClient
 CONFIG_FILE = "/tmp/matrix_creds"
 
 
+class MatrixError(RuntimeError):
+    what: str
+    rtc: int
+
+    def __init__(self, what: str, rtc: int):
+        self.rtc = rtc
+        self.what = what
+
+class MatrixNamespace(types.SimpleNamespace):
+    client: nio.AsyncClient
+
 async def get_spaces(client: AsyncClient) -> list[dict[str, str]]:
     output = []
     await client.sync()
@@ -43,11 +54,9 @@ async def get_room_by_name(client: AsyncClient, name: str) -> dict[str, str] | N
             return i
     return None
 
-def login() -> AsyncClient | None:
+def login() -> AsyncClient:
     if not os.path.exists(CONFIG_FILE):
-        print(f"Credential file {CONFIG_FILE} does not exist", file=sys.stderr)
-        print("Run the \"login\" command first", file=sys.stderr)
-        return None
+        raise MatrixError(f"Credential file {CONFIG_FILE} does not exist\nRun the \"login\" command first", 1)
 
     with open(CONFIG_FILE, 'r') as file:
         config = json.load(file)
@@ -60,21 +69,16 @@ def login() -> AsyncClient | None:
     return client
 
 
-async def login_cmd(args: types.SimpleNamespace) -> int:
+async def login_cmd(args: MatrixNamespace) -> int:
     if os.path.exists(CONFIG_FILE):
-        print(f"Credential file {CONFIG_FILE} is present", file=sys.stderr)
-        print("Run logout to clean it up before logging in", file=sys.stderr)
-        return 1
+        raise MatrixError(f"Credential file {CONFIG_FILE} is present\nRun logout to clean it up before logging in", 1)
 
     device_name = "denis_nio_client"
     client = AsyncClient(args.homeserver, args.uname, ssl=False)
     resp = await client.login(args.password, device_name)
 
     if isinstance(resp, nio.LoginError):
-        print(f"Could not login to {args.homeserver} as {args.uname}", file=sys.stderr)
-        print(f"{resp}", file=sys.stderr)
-        await client.close()
-        return 1
+        raise MatrixError(f"Could not login to {args.homeserver} as {args.uname}\n{resp}", 1)
 
     with open(CONFIG_FILE, 'w') as file:
         json.dump({
@@ -86,147 +90,95 @@ async def login_cmd(args: types.SimpleNamespace) -> int:
     await client.close()
     print("Logged in!")
 
-    return 0
 
-async def logout_cmd(_: types.SimpleNamespace) -> int:
-    retval = 0
-    client = login()
-    if client is None:
-        print("Nothing to log out!", file=sys.stderr)
-        return 0
-    
-    resp = await client.logout()
+async def logout_cmd(_: types.SimpleNamespace) -> int:  
+    resp = await args.client.logout()
     if isinstance(resp, nio.LogoutError):
-        print("Could not logout!", file=sys.stderr)
-        print(f"{resp}", file=sys.stderr)
-        retval = 1
-    await client.close()
+        raise MatrixError(f"Could not logout!\n{resp}", 1)
+
     os.remove(CONFIG_FILE)
     print("Logged out!")
-    return retval
 
 
-async def space_create_cmd(args: types.SimpleNamespace) -> int:
-    retval = 0
-    client = login()
-    if client is None:
-        return 1
-    
-    resp = await client.room_create(
+async def space_create_cmd(args: types.SimpleNamespace) -> int:    
+    resp = await args.client.room_create(
         nio.RoomVisibility.public,
         name=args.name,
         space=True
     )
 
     if isinstance(resp, nio.RoomCreateError):
-        retval = 1
-        print(f"Could not create space \"{args.name}\"", file=sys.stderr)
-        print(resp, file=sys.stderr)
-    else:
-        print("Space created successfully!")
+        raise MatrixError(f"Could not create space \"{args.name}\"\n{resp}", 1)
 
-    await client.close()
-    return retval
+    print("Space created successfully!")
 
-async def space_list_cmd(args: types.SimpleNamespace) -> int:
-    client = login()
-    if client is None:
-        return 1
 
-    spaces = await get_spaces(client)
+async def space_list_cmd(args: types.SimpleNamespace):
+    spaces = await get_spaces(args.client)
 
     print("Name\tID")
     for space in spaces:    
         print(f"{space['name']}\t{space['id']}")
-    await client.close()
-    return 0
 
-async def room_create_cmd(args: types.SimpleNamespace) -> int:
-    client = login()
-    if client is None:
-        return 1
 
-    resp: nio.RoomCreateResponse = await client.room_create(
+async def room_create_cmd(args: types.SimpleNamespace):
+    resp: nio.RoomCreateResponse = await args.client.room_create(
         nio.RoomVisibility.public,
         name=args.name
     )
 
     if isinstance(resp, nio.RoomCreateError):
-        print(f'Could not create room "{args.name}"', file=sys.stderr)
-        print(f'{resp}')
-        await client.close()
-        return 1
+        raise MatrixError(f'Could not create room "{args.name}"\n{resp}', 1)
+
     print("Room created!")
 
     if args.space is None:
-        return 0
+        return
     
     space_id = None
-    spaces = await get_spaces(client)
+    spaces = await get_spaces(args.client)
     for i in spaces:
         if i['name'] == args.space:
             space_id = i['id']
             break
     
     if space_id is None:
-        print(f'Could not associate room "{args.name}" with space "{args.space}', file=sys.stder)
-        print(f'Could not find space "{args.space}"')
-        await client.close()
-        return 1
+        raise MatrixError(f'Could not associate room "{args.name}" with space "{args.space}"\nCould not find space "{args.space}"', 1)
 
-    put_resp = await client.room_put_state(
+    put_resp = await args.client.room_put_state(
         room_id=space_id,
         event_type="m.space.child",
         state_key=resp.room_id,
         content={
-            "via": [client.homeserver],
+            "via": [args.client.homeserver],
             "suggested": True
         }
     )
 
     if isinstance(put_resp, nio.RoomPutStateError):
-        print(f'Could not associate room "{args.name}" with space "{args.space}', file=sys.stder)
-        print(f'{put_resp}')
-        await client.close()
-        return 1
-    
-    await client.close()
-    return 0
+        raise MatrixError(f'Could not associate room "{args.name}" with space "{args.space}\n{put_resp}', 1)
+
 
 async def room_list_cmd(args: types.SimpleNamespace) -> int:
-    client = login()
-    if client is None:
-        return 1
     print("Name\tID")
-    for i in await get_rooms(client):
+    for i in await get_rooms(args.client):
         print(f"{i['name']}\t{i['id']}")
-    await client.close()
     return 0
 
-async def room_invite_cmd(args: types.SimpleNamespace) -> int:
-    client = login()
-    if client is None:
-        return 1
-    
-    room = await get_room_by_name(client, args.name)
+async def room_invite_cmd(args: types.SimpleNamespace) -> int:  
+    room = await get_room_by_name(args.client, args.name)
     if room is None:
-        print(f'Could not find room named "{args.name}"')
-        await client.close()
-        return 1
+        raise MatrixError(f'Could not find room named "{args.name}"', 1)
     
-    resp = await client.room_invite(
+    resp = await args.client.room_invite(
         room['id'],
         args.user
     )
 
     if isinstance(resp, nio.RoomInviteError):
-        print(f'Could not invite "{args.user}" to "{args.name}"')
-        print(f'{resp}')
-        await client.close()
-        return 1
+        raise MatrixError(f'Could not invite "{args.user}" to "{args.name}"\n{resp}', 1)
     
     print('User invited!')
-    await client.close()
     return 0
     
 
@@ -270,7 +222,20 @@ async def main() -> None:
     room_invite_parser.set_defaults(func=room_invite_cmd)
 
     args = parser.parse_args()
-    await args.func(args)
 
+    rtc = 0
+    try:
+        if args.command != "login":
+            args.client = login()
+        else:
+            args.client = None
+        await args.func(args)
+    except MatrixError as e:
+        print(e.what, file=sys.stderr)
+        rtc = e.rtc
+    finally:
+        if args.client is not None:
+            await args.client.close()
+        sys.exit(rtc)
 
 asyncio.run(main())
